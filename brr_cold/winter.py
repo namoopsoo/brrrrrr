@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
+from datetime import timedelta
 
 import polars as pl
 import matplotlib.pyplot as plt
@@ -99,9 +100,104 @@ def plot_full_timeseries(df: pl.DataFrame, title: str = "NYC Daily Temperatures"
     plt.show()
 
 
-# ------------------------------------------------------------------------------
-# Dual stacked plot (top 5 coldest years)
-# ------------------------------------------------------------------------------
+
+def stacked_plot_top5_coldest_years(
+    df_with_roll: pl.DataFrame,
+    metric_col: str = "w14_high_avg_F",
+    title: str = "High Temp vs Feels-Like High (Top 5 Coldest Years)",
+) -> None:
+    ...
+    df2 = df2.with_columns(
+        pl.col("date").dt.year().alias("year")
+    )
+
+
+    yearly_min = (
+        df2.drop_nans(subset=["w14_high_avg_F"])
+        .sort("w14_high_avg_F")
+        .group_by("year")
+        .first()
+        
+    )
+
+    top5_years = yearly_min.sort("w14_high_avg_F").head(5)["year"].to_list()
+
+    rows = []
+    meta = []
+
+    for y in top5_years:
+        # row = yearly_min[yearly_min["year"] == y].iloc[0]
+        row = yearly_min.filter(pl.col("year") == y).row(0, named=True)
+
+        end_date_exclusive = row["date"]
+        start_date = end_date_exclusive - timedelta(days=14)
+        end_date_inclusive = end_date_exclusive - timedelta(days=1)
+
+        df3 = (
+            df2
+            .filter(pl.col("date") >= start_date)
+            .filter(pl.col("date") < end_date_exclusive)
+            .select(["date","high_temp_F"])
+            .with_columns(
+                pl.lit(y).alias("year")
+            )
+            .with_row_index(name="day_index")
+        )
+        # .to_dicts()
+
+        rows.extend(df3.to_dicts()
+        )
+        
+        meta.append({
+            "year": y,
+            "start": start_date,
+            "end_inclusive": end_date_inclusive,
+            "avg_high": df3["high_temp_F"].mean()
+        })
+
+    plot_df = pl.from_dicts(rows)
+    meta_df = pl.from_dicts(meta)
+
+    # Plot stacked
+    fig, ax = plt.subplots(figsize=(12,6.2))
+    offset_step = 40
+    blend = mtransforms.blended_transform_factory(ax.transAxes, ax.transData)
+
+    for i, y in enumerate(sorted(top5_years)):
+        # sub = plot_df[plot_df["year"] == y]
+        sub = plot_df.filter(pl.col("year") == y)
+        offset = i * offset_step
+        
+        series = sub["high_temp_F"] - sub["high_temp_F"].mean() + offset
+        ax.plot(sub["day_index"], series, linewidth=2)
+        
+        start_x, start_y = sub["day_index"].iloc[0], series.iloc[0]
+        end_x, end_y = sub["day_index"].iloc[-1], series.iloc[-1]
+        start_temp = round(sub["high_temp_F"].iloc[0])
+        end_temp = round(sub["high_temp_F"].iloc[-1])
+        
+        ax.scatter(start_x, start_y)
+        ax.text(start_x-0.3, start_y+1, f"{start_temp}", ha="right")
+        ax.scatter(end_x, end_y)
+        ax.text(end_x+0.2, end_y+1, f"{end_temp}", ha="left")
+        
+        m = meta_df[meta_df["year"] == y].iloc[0]
+        date_label = f"{m['start']:%b} {m['start'].day}, {m['start']:%Y}–{m['end_inclusive']:%b} {m['end_inclusive'].day}, {m['end_inclusive']:%Y}"
+        ax.text(-0.30, offset, date_label, transform=blend, va="center", ha="left")
+        
+        ax.text(6.5, offset, f"{m['avg_high']:.1f}°F avg",
+                ha="center", va="center",
+                bbox=dict(boxstyle="round,pad=0.2", facecolor="white", alpha=0.75, linewidth=0))
+
+    ax.set_yticks([])
+    ax.set_xlabel("Day within 14-day window")
+    ax.set_title("Coldest 14-Day Windows by Year (Top 5 Coldest Years)")
+
+    fig.subplots_adjust(left=0.34)
+
+    stacked_plot_path = "/mnt/data/nyc_coldest_windows_stacked_plot_labeled_dates_avg_2026.png"
+    plt.savefig(stacked_plot_path, dpi=150)
+    plt.close()
 
 def dual_stacked_plot_top5_coldest_years(
     df_with_roll: pl.DataFrame,
